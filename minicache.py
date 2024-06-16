@@ -1,12 +1,12 @@
-import time
-import sqlite3
-from typing import Union
-from fastapi import FastAPI
+import os
+from typing import Annotated
+from fastapi import FastAPI, Form, File
 
-DB = "disk.db"
+DB = "./disk.db"
+FILES = "file-storage"
 
 class Minicache:
-    _storage = {"name": "Jake"}
+    _storage = {}
 
     def set(self, k, v):
         self._storage[k] = v
@@ -15,24 +15,15 @@ class Minicache:
 minicache = Minicache()
 
 app = FastAPI()
-@app.get("/get/{key}")
-def get_val(key: str):
-    t0 = time.time()
-    val = minicache.get(key)
-    t1 = time.time()
-    print(f"Time taken: {t1 - t0}") # 0.0000003099 3 zehn millionstel
-    return {"val": val}
 
-@app.get("/get_from_disk/{key}")
-def get_val_from_disk(key: str):
-    t0 = time.time()
-    con = sqlite3.connect(DB)
-    cur = con.cursor()
-    res = cur.execute("SELECT * FROM disk WHERE key ='name'")
-    print(res.fetchone())
-    t1 = time.time()
-    print(f"Time taken: {t1 - t0}") # 0.00040 4 zehn tausendstel
-    return {"val_from_disk": "tmp"}
+@app.post("/upload")
+def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()]):
+    PATH = f"{FILES}/{filename}"
+    dir = os.path.dirname(PATH)
+    if not os.path.exists(dir): os.makedirs(dir)
+    with open(PATH, "wb") as fp:
+        fp.write(file)
+    return { "msg": "success"}
 
 if __name__ == "__main__":
-    print("something")
+    print("nothing yet")
