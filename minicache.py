@@ -1,21 +1,18 @@
 import os
 from typing import Annotated
 from fastapi import FastAPI, Form, File
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 DB = "./disk.db"
 FILES = "file-storage"
 
-class Minicache:
-    _storage = {}
-
-    def set(self, k, v):
-        self._storage[k] = v
-    def get(self, k): return self._storage[k]
-
-minicache = Minicache()
+minicache = {}
 
 app = FastAPI()
-
+# simulate client
+app.mount("/client", StaticFiles(directory="client"), name="client")
 @app.post("/upload")
 def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()]):
     PATH = f"{FILES}/{filename}"
@@ -23,7 +20,12 @@ def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()]
     if not os.path.exists(dir): os.makedirs(dir)
     with open(PATH, "wb") as fp:
         fp.write(file)
-    return { "msg": "success"}
+    print(type(file))
+    return { "msg": "file uploaded"}
+
+@app.get("/file/{filename}")
+def download_file(filename: str):
+    return FileResponse(FILES + "/" + filename, filename=filename)
 
 if __name__ == "__main__":
     print("nothing yet")

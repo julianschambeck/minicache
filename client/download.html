@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Client</title>
+</head>
+<body>
+    <input type="text" id="fileenter" placeholder="Enter file">
+    <button onclick="downloadFile()">Download</button>
+</body>
+<script>
+    const downloadFile = async () => {
+        const filename = document.getElementById("fileenter").value;
+        const response = await fetch(`http://localhost:8000/file/${filename}`)
+        if (response.ok) {
+            console.log("ok")
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.style.display = "none";
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+    }
+</script>
+</html>
