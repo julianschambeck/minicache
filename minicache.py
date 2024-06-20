@@ -3,6 +3,7 @@ import io
 import hashlib
 import time
 from datetime import datetime
+from functools import reduce
 
 from typing import Annotated
 from fastapi import FastAPI, Form, File, Request
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 DB = "./disk.db"
 FILES = "file-storage"
 TTL = 60*3 # time to live in seconds
+CACHE_MEMORY_MAX = 2**20 # 1 mebibyte (MiB) = 2**20 bytes
 minicache = {}
 app = FastAPI()
 
@@ -21,6 +23,11 @@ def hash_req(filename, host):
 def ttl_expired(key):
     t0 = int(datetime.fromisoformat(minicache[key]["timestamp"]).timestamp())
     return int(time.time()) - t0 > TTL
+def cache_bytes_size():
+    val_sizes = map(lambda x: len(x["data"]), list(minicache.values()))
+    total_size = reduce(lambda size, cur: size+cur, val_sizes)
+    return total_size 
+
 
 # host client site via webserver to avoid CORS
 app.mount("/client", StaticFiles(directory="client"), name="client")
@@ -31,8 +38,10 @@ def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()]
     if not os.path.exists(dir): os.makedirs(dir)
     with open(PATH, "wb") as fp:
         fp.write(file)
+
     key = hash_req(filename, req.headers.get("host"))
     minicache[key] = {"data": bytes(file), "timestamp": datetime.now().isoformat()}
+    cache_bytes_size()
     return { "msg": "file uploaded"}
 
 def iterfile(key):
@@ -46,6 +55,7 @@ def download_file(filename: str, req: Request):
         print("CACHE HIT")
         minicache[key]["timestamp"] = datetime.now().isoformat()
         return StreamingResponse(iterfile(key), media_type="application/pdf")
+
     print("READ FROM FS")
     with open(FILES + "/" + filename, "r+b") as fp:
         file_bytes = fp.read()
