@@ -12,58 +12,104 @@ from fastapi.staticfiles import StaticFiles
 
 DB = "./disk.db"
 FILES = "file-storage"
-TTL = 60 * 5 # time to live in seconds
-CACHE_MEMORY_MAX = 5 * 2**20 # 5 MiB
-minicache = {}
+TTL = 5  # time to live in seconds
+CACHE_MEMORY_MAX = 1.5 * 2**20 # 5 MiB (Mebibyte) in bytes
+
+class Minicache:
+
+    # simple in-memory key value store
+    _store = {}
+    def __init__(self):
+        pass
+
+    def get(self, key):
+        # cache misses 
+        if key in self._store and self.is_ttl_up(key):
+            del self._store[key]
+            return None
+        if key not in self._store: return None
+
+        # cache hit
+        return self._store[key]
+
+    def put(self, key, value):
+        self._store[key] = { "data": value, "timestamp": datetime.now().isoformat() }
+        # memory usage in MiB
+        mem_usage = reduce(lambda acc, val: acc + len(val["data"]), self.values(), 0)
+        print(f"memory usage after PUT {mem_usage / 2**20:.2f} MiB")
+        print("elements now", len(self.values()))
+        if mem_usage > CACHE_MEMORY_MAX:
+            print("more than designated memory, evict keys now!")
+            self.evict_keys(mem_usage)
+            mem_usage = reduce(lambda acc, val: acc + len(val["data"]), self.values(), 0)
+            print(f"memory usage after evicting oldest keys {(mem_usage / 2**20):.2f} MiB")
+            print("elements now", len(self.values()))
+
+    def delete(self, key):
+        if key in self._store: del self._store[key]
+
+    def values(self):
+        return self._store.values()
+
+    def keys(self):
+        return self._store.keys()
+
+    def evict_keys(self, mem_usage):
+        # key-values from oldest to newest
+        kvs = sorted(self._store.items(), key=lambda item: datetime.fromisoformat(item[1]["timestamp"]))
+        for k, v in kvs:
+            if mem_usage <= CACHE_MEMORY_MAX: return
+            del self._store[k]
+            mem_usage -= len(v["data"])
+
+    def is_ttl_up(self, key):
+        if key not in self._store: return False
+        t0 = int(datetime.fromisoformat(self._store[key]["timestamp"]).timestamp())
+        return int(time.time()) - t0 > TTL
+
+
+# super simple cache policy, just use filename and host
+def hash_key(filename, host):
+    return hashlib.md5(bytes(f"{filename},{host}", "utf-8")).hexdigest()
+def cache_bytes_size():
+    val_sizes = map(lambda x: len(x["data"]), list(minicache.values()))
+    total_size = reduce(lambda size, cur: size+cur, val_sizes)
+    return total_size 
 
 app = FastAPI()
 # host client site via webserver to avoid CORS
 app.mount("/client", StaticFiles(directory="client"), name="client")
 
-# super simple cache policy, just use filename and host
-def hash_key(filename, host):
-    return hashlib.md5(bytes(f"{filename},{host}", "utf-8")).hexdigest()
-def ttl_up(key):
-    if key not in minicache: return None
-    t0 = int(datetime.fromisoformat(minicache[key]["timestamp"]).timestamp())
-    return int(time.time()) - t0 > TTL
-def cache_bytes_size():
-    val_sizes = map(lambda x: len(x["data"]), list(minicache.values()))
-    total_size = reduce(lambda size, cur: size+cur, val_sizes)
-    return total_size 
-def evict_keys():
-    pass
+mini = Minicache()
 
 @app.post("/upload")
 def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()], req: Request):
-    # write to file system
+    # save file on server file system
     PATH = f"{FILES}/{filename}"
     dir = os.path.dirname(PATH)
     if not os.path.exists(dir): os.makedirs(dir)
     with open(PATH, "wb") as fp:
         fp.write(file)
 
-    # cache for next time
-    minicache[hash_key(filename, req.headers.get("host"))] = {"data": bytes(file), "timestamp": datetime.now().isoformat()}
-    print(f"{filename} size is {(len(bytes(file)) / (1 << 20)):.2f} MiB")
-    return {"msg": "file uploaded"}
+    # cache for next GET. for now, store files (as bytes) only
+    mini.put(hash_key(filename, req.headers.get("host")), bytes(file))
+    print(f"{filename} file size is {(len(bytes(file)) / (1 << 20)):.2f} MiB")
+    return {"message": "file uploaded"}
 
-def iterfile(key):
-    with io.BytesIO(minicache[key]["data"]) as fp:
-        yield from fp
+def iterfile(file_bytes):
+    with io.BytesIO(file_bytes) as f:
+        yield from f
 
 @app.get("/file/{filename}")
 def download_file(filename: str, req: Request):
-    if not ttl_up(key:=hash_key(filename, req.headers.get("host"))) and ttl_up(key) is not None: # cache hit 
+    if (file_bytes:=mini.get(hash_key(filename, req.headers.get("host")))) is not None:
         print("CACHE HIT")
-        return StreamingResponse(iterfile(key), media_type="application/pdf")
-    elif ttl_up(key): del minicache[key]
+        return StreamingResponse(iterfile(file_bytes), media_type="application/pdf")
 
-    # read from source, add to cache again 
+    # read from server file system, add to cache for next time 
     print("READ FROM FS")
     with open(FILES + "/" + filename, "r+b") as f:
-        f_bytes = f.read()
-    minicache[key] = {"data": f_bytes, "timestamp": datetime.now().isoformat()}
+        mini.put(key, f.read())
     return FileResponse(FILES + "/" + filename, filename=filename)
 
 if __name__ == "__main__":
