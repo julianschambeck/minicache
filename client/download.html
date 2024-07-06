@@ -10,7 +10,7 @@
 <script>
     const downloadFile = async () => {
         const filename = document.getElementById("fileenter").value;
-        const response = await fetch(`http://localhost:8000/file/${filename}`)
+        const response = await fetch(`http://localhost:8000/file/db/${filename}`)
         if (response.ok) {
             console.log("ok")
             const blob = await response.blob();

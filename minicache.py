@@ -5,11 +5,11 @@ from datetime import datetime
 from functools import reduce
 
 from typing import Annotated
+import sqlite3
 from fastapi import FastAPI, Form, File, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-DB = "./disk.db"
 FILES = "file-storage"
 
 # super simple cache policy, just use filename and host
@@ -70,7 +70,9 @@ app = FastAPI()
 # host client site via webserver to avoid CORS
 app.mount("/client", StaticFiles(directory="client"), name="client")
 
-mini = Minicache()
+mini = Minicache(ttl=3)
+
+# describe API to store and return files for download
 
 @app.post("/upload")
 def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()], req: Request):
@@ -103,5 +105,38 @@ def download_file(filename: str, req: Request):
         mini.put(key, f.read())
     return FileResponse(FILES + "/" + filename, filename=filename)
 
-if __name__ == "__main__":
-    print("nothing yet")
+def get_conn():
+    conn = sqlite3.connect("sqlite.db")
+    return conn
+
+@app.post("/upload/db")
+def upload_to_db(file: Annotated[bytes, File()], filename: Annotated[str, Form()], req: Request):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY,
+            filename TEXT,
+            data BLOB
+        )
+    ''')
+    cursor.execute('''
+        INSERT INTO files (filename, data)
+        VALUES (?, ?)
+    ''', (filename, bytes(file)))
+    conn.commit()
+    conn.close()
+    return "file stored in db"
+
+@app.get("/file/db/{filename}")
+def download_from_db(filename: str, req: Request):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT data FROM files
+        WHERE filename = ?
+    ''', (filename,))
+    file_bytes = cursor.fetchone()[0]
+    conn.close()
+    return StreamingResponse(iterfile(file_bytes))  
+
