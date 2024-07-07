@@ -7,7 +7,7 @@ from functools import reduce
 from typing import Annotated
 import sqlite3
 from fastapi import FastAPI, Form, File, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 FILES = "file-storage"
@@ -70,7 +70,7 @@ app = FastAPI()
 # host client site via webserver to avoid CORS
 app.mount("/client", StaticFiles(directory="client"), name="client")
 
-mini = Minicache(ttl=3)
+mini = Minicache(ttl=2)
 
 # describe API to store and return files for download
 
@@ -88,22 +88,19 @@ def upload_file(file: Annotated[bytes, File()], filename: Annotated[str, Form()]
     print(f"{filename} file size is {(len(bytes(file)) / (1 << 20)):.2f} MiB")
     return {"message": "file uploaded"}
 
-def iterfile(file_bytes):
-    with io.BytesIO(file_bytes) as f:
-        yield from f
-
 @app.get("/file/{filename}")
 def download_file(filename: str, req: Request):
     key = hash_key(filename, req.headers.get("host"))
-    if (file_bytes:=mini.get(key)) is not None:
+    if (val:=mini.get(key)) is not None:
         print("CACHE HIT")
-        return StreamingResponse(iterfile(file_bytes), media_type="application/pdf")
+        return Response(content=val["data"])
 
     # read from server file system, add to cache for next time 
     print("CACHE MISS, READ FROM FS INSTEAD")
     with open(FILES + "/" + filename, "r+b") as f:
-        mini.put(key, f.read())
-    return FileResponse(FILES + "/" + filename, filename=filename)
+        file_bytes = f.read()
+        mini.put(key, file_bytes)
+        return Response(content=file_bytes)
 
 def get_conn():
     conn = sqlite3.connect("sqlite.db")
@@ -138,5 +135,5 @@ def download_from_db(filename: str, req: Request):
     ''', (filename,))
     file_bytes = cursor.fetchone()[0]
     conn.close()
-    return StreamingResponse(iterfile(file_bytes))  
+    return Response(content=file_bytes)
 
